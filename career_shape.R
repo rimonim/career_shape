@@ -209,15 +209,17 @@ d_threeyear <- d_agg %>%
   mutate(threeyear = as.integer(cut_width(date(date), 1095))) %>% 
   group_by(group, scholar_name, threeyear) %>% 
   summarise(across(embedding_1:embedding_768, ~mean(.x, na.rm = TRUE), .names = "{.col}_diff"),
+            across(embedding_1:embedding_768, ~var(.x, na.rm = TRUE), .names = "{.col}_var"),
             n_pubs = n(),
-            n_authors = sum((n_authors-1), na.rm = TRUE)) %>% 
+            n_authors = sum((n_authors-1), na.rm = TRUE)/n()) %>% 
   mutate(across(embedding_1_diff:embedding_768_diff, ~diff(c(NA, .x)))) %>% 
   mutate(across(embedding_1_diff:embedding_768_diff, ~.x^2)) %>% 
   rowwise() %>% 
-  mutate(euc_dist = sqrt(sum(across(embedding_1_diff:embedding_768_diff), na.rm = TRUE))) %>% 
+  mutate(euc_dist = sqrt(sum(across(embedding_1_diff:embedding_768_diff), na.rm = TRUE)),
+         total_var = sum(across(embedding_1_var:embedding_768_var), na.rm = TRUE)) %>% 
   # Add Gender
   left_join(d_analysis %>% select(scholar_name, gender, group_type)) %>% 
-  select(group, scholar_name, gender, group_type, euc_dist, n_pubs, n_authors, threeyear) %>% 
+  select(group, scholar_name, gender, group_type, total_var, euc_dist, n_pubs, n_authors, threeyear) %>% 
   # remove 1st (always 0 difference) and last row (likely smaller n)
   group_by(scholar_name) %>% 
   slice(2:(n()-1))
@@ -269,6 +271,17 @@ quintic_mod <- add_criterion(quintic_mod, "kfold")
 pairs(quintic_mod_gender)
 
 loo_compare(reduced_mod, quadratic_mod, cubic_mod, quartic_mod, quintic_mod, criterion = "kfold") # Quartic Wins!
+
+# Try adding n_authors
+quartic_mod_coauthors <- brm(euc_dist ~ n_authors + poly(threeyear,4) + (poly(threeyear,4) | scholar_name), data = d_threeyear, 
+                   prior = c(
+                     prior(normal(0, 50), class = "b")
+                   ),
+                   chains = 4, cores = 4, iter = 10000, control = list(adapt_delta = .99))
+
+quartic_mod_coauthors <- add_criterion(quartic_mod_coauthors, "kfold")
+loo_compare(quartic_mod, quartic_mod_coauthors, criterion = "kfold") # does not improve the model’s expected predictive accuracy 
+
 
 # Plot euc_dist with respect to time, with posterior predictive of quartic_mod 
 d_threeyear %>%
@@ -328,7 +341,8 @@ d_threeyear %>%
                      labels = seq(6, 45, 3)) +
   theme(strip.background = element_rect(fill = "lavender"))
 
-
+d_threeyear %>% filter(n_pubs < 2)
+  # The truth comes out! The three authors with the strange shape are also the only three with bins containing only one publication!
 
 
 # Who is More Likely to Change Interests over their Career?
@@ -368,6 +382,7 @@ d_threeyear %>%
   model.comparison(lm(euc_dist ~ n_authors + group_type, d_analysis),
                    lm(euc_dist ~ n_authors*group_type, d_analysis))
   
+  cor(d_analysis$n_authors, d_analysis$euc_dist)
 # Who is More Likely to Have Multiple Research Interests?
   # By optimal K
     # Men or Women, University or Institute
@@ -440,3 +455,6 @@ d_threeyear %>%
       labs(x = "Average Number of Co-Authors", 
            y = "Total Variance of Publication Semantic Embeddings", 
            color = "", size = "Career Length\n(Years)")
+
+    cor(d_analysis$n_authors, d_analysis$total_var)
+    
